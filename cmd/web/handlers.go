@@ -1,65 +1,74 @@
 package main
 
 import (
-	"fmt"
-	"html/template" // новый импорт
-	"log"           // новый импорт
-	"net/http"
-	"strconv"
+    "errors"
+    "fmt"
+    "golangify.com/snippetbox/pkg/models"
+    "net/http"
+    "strconv"
 )
 
-// Обработчик главной страницы.
-func home(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
+func (app *application) home(w http.ResponseWriter, r *http.Request) {
+    if r.URL.Path != "/" {
+        app.notFound(w)
+        return
+    }
 
-	// Инициализируем срез содержащий пути к двум файлам. Обратите внимание, что
-	// файл home.page.tmpl должен быть *первым* файлом в срезе.
-	files := []string{
-		"./ui/html/home.page.tmpl",
-		"./ui/html/base.layout.tmpl",
-		"./ui/html/footer.partial.tmpl",
-	}
+    s, err := app.snippets.Latest()
+    if err != nil {
+        app.serverError(w, err)
+        return
+    }
 
-	// Используем функцию template.ParseFiles() для чтения файлов шаблона.
-	// Если возникла ошибка, мы запишем детальное сообщение ошибки и
-	// используя функцию http.Error() мы отправим пользователю
-	// ответ: 500 Internal Server Error (Внутренняя ошибка на сервере)
-	ts, err := template.ParseFiles(files...)
-	if err != nil {
-		log.Println(err.Error())
-		http.Error(w, "Internal Server Error", 500)
-		return
-	}
-
-	// Затем мы используем метод Execute() для записи содержимого
-	// шаблона в тело HTTP ответа. Последний параметр в Execute() предоставляет
-	// возможность отправки динамических данных в шаблон.
-	err = ts.Execute(w, nil)
-	if err != nil {
-		log.Println(err.Error())
-		http.Error(w, "Internal Server Error", 500)
-	}
+    // Используем помощника render() для отображения шаблона.
+    app.render(w, r, "home.page.tmpl", &templateData{
+        Snippets: s,
+    })
 }
 
-func showSnippet(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.URL.Query().Get("id"))
-	if err != nil || id < 1 {
-		http.NotFound(w, r)
-		return
-	}
+func (app *application) showSnippet(w http.ResponseWriter, r *http.Request) {
+    id, err := strconv.Atoi(r.URL.Query().Get("id"))
+    if err != nil || id < 1 {
+        app.notFound(w)
+        return
+    }
 
-	fmt.Fprintf(w, "Отображение определенной заметки с ID %d...", id)
+    s, err := app.snippets.Get(id)
+    if err != nil {
+        if errors.Is(err, models.ErrNoRecord) {
+            app.notFound(w)
+        } else {
+            app.serverError(w, err)
+        }
+        return
+    }
+
+    // Используем помощника render() для отображения шаблона.
+    app.render(w, r, "show.page.tmpl", &templateData{
+        Snippet: s,
+    })
 }
 
-func createSnippet(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "Метод не дозволен", 405)
-		return
-	}
+func (app *application) createSnippet(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        w.Header().Set("Allow", http.MethodPost)
+        app.clientError(w, http.StatusMethodNotAllowed)
+        return
+    }
 
-	w.Write([]byte("Создание новой заметки..."))
+    // Создаем несколько переменных, содержащих тестовые данные. Мы удалим их позже.
+    title := "История про улитку"
+    content := "Улитка выползла из раковины,\nвытянула рожки,\nи опять подобрала их."
+    expires := "7"
+
+    // Передаем данные в метод SnippetModel.Insert(), получая обратно
+    // ID только что созданной записи в базу данных.
+    id, err := app.snippets.Insert(title, content, expires)
+    if err != nil {
+        app.serverError(w, err)
+        return
+    }
+
+    // Перенаправляем пользователя на соответствующую страницу заметки.
+    http.Redirect(w, r, fmt.Sprintf("/snippet?id=%d", id), http.StatusSeeOther)
 }
